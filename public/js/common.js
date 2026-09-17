@@ -6,8 +6,15 @@ const Auth = {
   // Silent — also used when the server reports an expired session.
   logout() { localStorage.removeItem('fo_token'); localStorage.removeItem('fo_user'); location.href = '/'; },
   // What the Logout buttons call: always asks first.
-  confirmLogout(extra) {
-    if (confirm('Log out of FoodHub?' + (extra ? '\n\n' + extra : ''))) this.logout();
+  async confirmLogout(extra) {
+    const ok = await confirmDialog({
+      title: 'Log out of FoodHub?',
+      message: extra || '',
+      confirmText: 'Log out',
+      cancelText: 'Stay signed in',
+      danger: true,
+    });
+    if (ok) this.logout();
   },
   require(role) {
     const u = this.user;
@@ -33,6 +40,50 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const rupee = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtTime = (d) => new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 const statusClass = (s) => 's-' + String(s).split(' ')[0];
+
+// In-app confirmation box — replaces the browser's native confirm(), which shows
+// the bare host name and can't be styled. Resolves true/false.
+function confirmDialog({ title = 'Are you sure?', message = '', confirmText = 'Confirm', cancelText = 'Cancel', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const back = document.createElement('div');
+    back.className = 'modal-back';
+    back.innerHTML = `
+      <div class="modal" role="alertdialog" aria-modal="true">
+        <h3></h3>
+        <p></p>
+        <div class="modal-actions">
+          <button class="btn ghost" data-act="cancel"></button>
+          <button class="btn ${danger ? 'danger' : ''}" data-act="ok"></button>
+        </div>
+      </div>`;
+
+    // textContent, so an order number or address can never inject markup
+    back.querySelector('h3').textContent = title;
+    const p = back.querySelector('p');
+    message ? (p.textContent = message) : p.remove();
+    back.querySelector('[data-act=cancel]').textContent = cancelText;
+    back.querySelector('[data-act=ok]').textContent = confirmText;
+
+    const close = (result) => {
+      document.removeEventListener('keydown', onKey);
+      back.remove();
+      resolve(result);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') close(false);
+      if (e.key === 'Enter') close(true);
+    };
+    back.onclick = (e) => {
+      const act = e.target.dataset.act;
+      if (act === 'ok') close(true);
+      else if (act === 'cancel' || e.target === back) close(false); // backdrop click cancels
+    };
+
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(back);
+    back.querySelector('[data-act=ok]').focus();
+  });
+}
 
 function toast(msg, type = '') {
   let box = document.getElementById('toasts');

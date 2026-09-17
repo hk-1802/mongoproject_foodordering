@@ -101,7 +101,15 @@
 
     document.getElementById('orders').onclick = async (e) => {
       const id = e.target.dataset.cancel; if (!id) return;
-      if (!confirm('Cancel this order?')) return;
+      const o = orders.find((x) => x._id === id);
+      const ok = await confirmDialog({
+        title: 'Cancel this order?',
+        message: `${o.orderNumber} · ${rupee(o.total)} will be cancelled. This cannot be undone.`,
+        confirmText: 'Cancel order',
+        cancelText: 'Keep it',
+        danger: true,
+      });
+      if (!ok) return;
       try { upsert(await api(`/orders/${id}/cancel`, { method: 'PATCH' })); toast('Order cancelled'); }
       catch (ex) { toast(ex.message, 'bad'); }
     };

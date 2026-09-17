@@ -134,10 +134,18 @@
       const o = orders.find((x) => x._id === id);
 
       // Cancelling is the one choice that can't be walked back, so confirm it.
-      if (status === 'Cancelled' &&
-          !confirm(`Cancel order ${o.orderNumber} from ${o.customerName}?\n\nThe customer is notified immediately and this cannot be undone.`)) {
-        e.target.value = o.status; // put the dropdown back where it was
-        return;
+      if (status === 'Cancelled') {
+        const ok = await confirmDialog({
+          title: `Cancel ${o.orderNumber}?`,
+          message: `${o.customerName}'s order of ${rupee(o.total)} will be cancelled. They are notified immediately and this cannot be undone.`,
+          confirmText: 'Cancel order',
+          cancelText: 'Keep it',
+          danger: true,
+        });
+        if (!ok) {
+          e.target.value = o.status; // put the dropdown back where it was
+          return;
+        }
       }
 
       e.target.disabled = true;
