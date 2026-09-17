@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FoodHub — My Orders</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo">🍽️ FoodHub</div>
+    <div class="right">
+      <span class="hello" id="hello"></span>
+      <button class="btn ghost small" onclick="location.href='/menu.html'">← Back to menu</button>
+      <button class="btn ghost small" onclick="Auth.confirmLogout()">Logout</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <h2 class="section-title" style="margin-top:8px">My Orders <span class="live off" id="liveDot">Live</span></h2>
+    <div class="chips" id="filters"></div>
+    <div id="orders"><p class="empty">Loading your orders…</p></div>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/common.js"></script>
+  <script>
+    const user = Auth.require('user');
+    document.getElementById('hello').textContent = user ? `Hi, ${user.name.split(' ')[0]}` : '';
+
+    const STEPS = ['Pending', 'Confirmed', 'Preparing', 'Out for Delivery', 'Delivered'];
+    const LABELS = ['Placed', 'Confirmed', 'Preparing', 'On the way', 'Delivered'];
+    const ACTIVE = ['Pending', 'Confirmed', 'Preparing', 'Out for Delivery'];
+    const FILTERS = ['All', 'Active', 'Delivered', 'Cancelled'];
+    let orders = [], filter = 'All';
+
+    document.getElementById('filters').innerHTML = FILTERS
+      .map((f) => `<button class="chip ${f === filter ? 'active' : ''}" data-f="${f}">${f}</button>`).join('');
+
+    document.getElementById('filters').onclick = (e) => {
+      const f = e.target.dataset.f; if (!f) return;
+      filter = f;
+      document.querySelectorAll('.chip').forEach((b) => b.classList.toggle('active', b.dataset.f === f));
+      renderOrders();
+    };
+
+    const matches = (o) =>
+      filter === 'All' ? true : filter === 'Active' ? ACTIVE.includes(o.status) : o.status === filter;
+
+    function orderCard(o) {
+      const step = STEPS.indexOf(o.status);
+      const lines = o.items
+        .map((i) => `<div><span>${i.emoji} ${esc(i.name)} × ${i.qty}</span><span>${rupee(i.price * i.qty)}</span></div>`)
+        .join('');
+      const bars = STEPS.map((_, i) => `<span class="${i <= step ? 'on' : ''}"></span>`).join('');
+      const labels = LABELS.map((l, i) => `<span class="${i <= step ? 'on' : ''}">${l}</span>`).join('');
+      return `<div class="order-card">
+        <div class="top">
+          <div><b>${esc(o.orderNumber)}</b> <span class="muted">· ${fmtTime(o.createdAt)}</span></div>
+          <span class="status ${statusClass(o.status)}">${esc(o.status)}</span>
+        </div>
+
+        <div class="lines">${lines}</div>
+
+        <div class="totals">
+          <div><span>Subtotal</span><span>${rupee(o.subtotal)}</span></div>
+          <div><span>GST (5%)</span><span>${rupee(o.tax)}</span></div>
+          <div><span>Delivery</span><span>${o.deliveryFee ? rupee(o.deliveryFee) : 'FREE'}</span></div>
+          <div class="grand"><span>Total</span><span>${rupee(o.total)}</span></div>
+        </div>
+
+        ${o.status !== 'Cancelled'
+          ? `<div class="progress">${bars}</div><div class="progress-labels">${labels}</div>`
+          : ''}
+
+        <div class="addr">
+          📍 ${esc(o.address)}<br />
+          📞 ${esc(o.phone)} · 💳 ${esc(o.paymentMethod)}
+          ${o.notes ? `<br />📝 ${esc(o.notes)}` : ''}
+        </div>
+
+        ${o.status === 'Pending'
+          ? `<div class="top" style="margin-top:12px"><span></span><button class="btn ghost small" data-cancel="${o._id}">Cancel order</button></div>`
+          : ''}
+      </div>`;
+    }
+
+    function renderOrders() {
+      const box = document.getElementById('orders');
+      const list = orders.filter(matches);
+      if (!orders.length) {
+        box.innerHTML = `<p class="empty">You haven't ordered anything yet.<br /><br />
+          <button class="btn" onclick="location.href='/menu.html'">Browse the menu</button></p>`;
+        return;
+      }
+      box.innerHTML = list.length
+        ? list.map(orderCard).join('')
+        : `<p class="empty">No ${filter.toLowerCase()} orders.</p>`;
+    }
+
+    document.getElementById('orders').onclick = async (e) => {
+      const id = e.target.dataset.cancel; if (!id) return;
+      if (!confirm('Cancel this order?')) return;
+      try { upsert(await api(`/orders/${id}/cancel`, { method: 'PATCH' })); toast('Order cancelled'); }
+      catch (ex) { toast(ex.message, 'bad'); }
+    };
+
+    function upsert(order) {
+      const i = orders.findIndex((o) => o._id === order._id);
+      i >= 0 ? (orders[i] = order) : orders.unshift(order);
+      renderOrders();
+    }
+
+    if (user) {
+      const socket = connectSocket((on) => document.getElementById('liveDot').classList.toggle('off', !on));
+      socket.on('order:updated', (o) => {
+        upsert(o);
+        toast(`${o.orderNumber}: ${o.status}`, o.status === 'Cancelled' ? 'bad' : 'ok');
+      });
+      api('/orders/my')
+        .then((list) => { orders = list; renderOrders(); })
+        .catch((e) => { toast(e.message, 'bad'); document.getElementById('orders').innerHTML = '<p class="empty">Could not load orders.</p>'; });
+    }
+  </script>
+</body>
+</html>

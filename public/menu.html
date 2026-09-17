@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FoodHub — Menu</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo">🍽️ FoodHub</div>
+    <div class="right">
+      <span class="hello" id="hello"></span>
+      <button class="btn ghost small cart-btn" id="ordersLink">My Orders <span class="badge hidden" id="orderCount">0</span></button>
+      <button class="btn small cart-btn" id="openCart">🛒 Cart <span class="badge hidden" id="cartCount">0</span></button>
+      <button class="btn ghost small" id="logoutBtn">Logout</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="toolbar">
+      <input class="search" id="search" placeholder="Search dishes…" />
+      <label class="hello"><input type="checkbox" id="vegOnly" /> Veg only</label>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="grid" id="grid"></div>
+  </main>
+
+  <!-- Cart drawer -->
+  <div class="overlay hidden" id="overlay"></div>
+  <aside class="drawer hidden" id="drawer">
+    <header><h2>Your Cart</h2><button class="btn ghost small" id="closeCart">✕</button></header>
+    <div class="content">
+      <div id="cartLines"></div>
+      <div id="checkout" class="hidden">
+        <div class="totals" id="totals"></div>
+        <form id="orderForm">
+          <div class="field">
+            <div class="field-head">
+              <label>Delivery address</label>
+              <button type="button" class="linkbtn" id="locBtn">📍 Use my location</button>
+            </div>
+            <textarea name="address" rows="2" required placeholder="House no, street, area, city"></textarea>
+            <small class="locmsg" id="locMsg"></small>
+          </div>
+          <div class="field"><label>Phone</label><input name="phone" required pattern="[0-9+ ]{10,15}" /></div>
+          <div class="field"><label>Payment</label>
+            <select name="paymentMethod"><option>Cash on Delivery</option><option>UPI</option><option>Card</option></select>
+          </div>
+          <div class="field"><label>Notes (optional)</label><input name="notes" placeholder="Less spicy, no onion…" /></div>
+          <div class="error" id="orderErr"></div>
+          <button class="btn block" type="submit" id="placeBtn">Place Order</button>
+        </form>
+      </div>
+    </div>
+  </aside>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/common.js"></script>
+  <script>
+    const user = Auth.require('user');
+    document.getElementById('hello').textContent = user ? `Hi, ${user.name.split(' ')[0]}` : '';
+
+    const TAX = 0.05, FEE = 30, FREE_ABOVE = 500;
+    let menu = [], orders = [], category = 'All';
+    const cart = new Map(); // id -> qty
+
+    /* ---------- Menu ---------- */
+    async function loadMenu() {
+      menu = await api('/menu');
+      const cats = ['All', ...new Set(menu.map((m) => m.category))];
+      document.getElementById('chips').innerHTML = cats
+        .map((c) => `<button class="chip ${c === category ? 'active' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('');
+      renderMenu();
+    }
+    document.getElementById('chips').onclick = (e) => {
+      const c = e.target.dataset.cat; if (!c) return;
+      category = c;
+      document.querySelectorAll('.chip').forEach((b) => b.classList.toggle('active', b.dataset.cat === c));
+      renderMenu();
+    };
+    document.getElementById('search').oninput = renderMenu;
+    document.getElementById('vegOnly').onchange = renderMenu;
+
+    function qtyControl(id) {
+      const q = cart.get(id) || 0;
+      return q
+        ? `<div class="qty"><button data-act="dec" data-id="${id}">−</button><span>${q}</span><button data-act="inc" data-id="${id}">+</button></div>`
+        : `<button class="btn small" data-act="inc" data-id="${id}">Add</button>`;
+    }
+
+    function renderMenu() {
+      const term = document.getElementById('search').value.trim().toLowerCase();
+      const vegOnly = document.getElementById('vegOnly').checked;
+      const list = menu.filter((m) =>
+        (category === 'All' || m.category === category) &&
+        (!vegOnly || m.veg) &&
+        (!term || m.name.toLowerCase().includes(term) || m.description.toLowerCase().includes(term)));
+      document.getElementById('grid').innerHTML = list.length ? list.map((m) => `
+        <div class="food ${m.available ? '' : 'unavailable'}">
+          <div class="pic">${m.emoji}</div>
+          <div class="body">
+            <h3><span class="vegdot ${m.veg ? '' : 'nonveg'}"></span>${esc(m.name)}</h3>
+            <p>${esc(m.description)}</p>
+            <div class="row">
+              <span class="price">${rupee(m.price)}</span>
+              ${m.available ? qtyControl(m._id) : '<span class="muted">Unavailable</span>'}
+            </div>
+          </div>
+        </div>`).join('') : '<p class="empty">No dishes match.</p>';
+    }
+
+    document.addEventListener('click', (e) => {
+      const { act, id } = e.target.dataset;
+      if (!act || !id) return;
+      const q = cart.get(id) || 0;
+      if (act === 'inc') cart.set(id, Math.min(q + 1, 50));
+      if (act === 'dec') q <= 1 ? cart.delete(id) : cart.set(id, q - 1);
+      renderMenu(); renderCart();
+    });
+
+    /* ---------- Cart ---------- */
+    const drawer = document.getElementById('drawer'), overlay = document.getElementById('overlay');
+    const toggleCart = (open) => { drawer.classList.toggle('hidden', !open); overlay.classList.toggle('hidden', !open); };
+    document.getElementById('openCart').onclick = () => toggleCart(true);
+    document.getElementById('closeCart').onclick = overlay.onclick = () => toggleCart(false);
+    document.getElementById('ordersLink').onclick = () => (location.href = '/orders.html');
+
+    // The cart only lives in memory, so warn if logging out would throw it away.
+    document.getElementById('logoutBtn').onclick = () => {
+      const n = [...cart.values()].reduce((s, q) => s + q, 0);
+      Auth.confirmLogout(n ? `Your cart has ${n} item${n > 1 ? 's' : ''} in it and will be emptied.` : '');
+    };
+    document.querySelector('#orderForm [name=phone]').value = user?.phone || '';
+
+    /* ---------- "Use my location" ---------- */
+    const locBtn = document.getElementById('locBtn');
+    const locMsg = document.getElementById('locMsg');
+    const addressBox = document.querySelector('#orderForm [name=address]');
+    const setLocMsg = (text, bad) => { locMsg.textContent = text; locMsg.classList.toggle('bad', !!bad); };
+
+    const GEO_ERRORS = {
+      1: 'Location permission was denied. Allow it from the icon in the address bar, then try again.',
+      2: 'Your location is unavailable right now — check that GPS/location is on.',
+      3: 'Timed out while finding you. Try again, or type the address.',
+    };
+
+    locBtn.onclick = () => {
+      if (!navigator.geolocation) return setLocMsg('This browser cannot share a location.', true);
+      // Browsers only expose geolocation on HTTPS or localhost — over plain http://<LAN-ip> it is blocked.
+      if (!window.isSecureContext) {
+        return setLocMsg('Your browser only shares location over HTTPS or on localhost. Open this site at http://localhost:5000 to use it — otherwise type the address below.', true);
+      }
+
+      locBtn.disabled = true;
+      setLocMsg('Finding your location…');
+      navigator.geolocation.getCurrentPosition(
+        async ({ coords }) => {
+          try {
+            const r = await api(`/geocode/reverse?lat=${coords.latitude}&lon=${coords.longitude}`);
+            if (!r.address) throw new Error('No address found at that spot — type it below.');
+            addressBox.value = r.address;
+            setLocMsg(`Located to about ${Math.round(coords.accuracy)} m — please add your house/flat number.`);
+          } catch (ex) { setLocMsg(ex.message, true); }
+          locBtn.disabled = false;
+        },
+        (err) => { setLocMsg(GEO_ERRORS[err.code] || err.message, true); locBtn.disabled = false; },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+      );
+    };
+
+    function renderCart() {
+      const lines = [...cart.entries()].map(([id, qty]) => ({ item: menu.find((m) => m._id === id), qty })).filter((l) => l.item);
+      const count = lines.reduce((s, l) => s + l.qty, 0);
+      const badge = document.getElementById('cartCount');
+      badge.textContent = count; badge.classList.toggle('hidden', !count);
+
+      document.getElementById('cartLines').innerHTML = lines.length ? lines.map(({ item, qty }) => `
+        <div class="cart-line">
+          <span class="em">${item.emoji}</span>
+          <div class="info"><b>${esc(item.name)}</b><br /><small>${rupee(item.price)} × ${qty}</small></div>
+          <div class="qty"><button data-act="dec" data-id="${item._id}">−</button><span>${qty}</span><button data-act="inc" data-id="${item._id}">+</button></div>
+        </div>`).join('') : '<p class="empty">Your cart is empty.<br/>Add something tasty!</p>';
+
+      const subtotal = lines.reduce((s, l) => s + l.item.price * l.qty, 0);
+      const tax = Math.round(subtotal * TAX), fee = subtotal >= FREE_ABOVE ? 0 : FEE;
+      document.getElementById('checkout').classList.toggle('hidden', !lines.length);
+      document.getElementById('totals').innerHTML = `
+        <div><span>Subtotal</span><span>${rupee(subtotal)}</span></div>
+        <div><span>GST (5%)</span><span>${rupee(tax)}</span></div>
+        <div><span>Delivery ${fee ? `<small class="muted">(free above ${rupee(FREE_ABOVE)})</small>` : ''}</span><span>${fee ? rupee(fee) : 'FREE'}</span></div>
+        <div class="grand"><span>Total</span><span>${rupee(subtotal + tax + fee)}</span></div>`;
+    }
+
+    document.getElementById('orderForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target), btn = document.getElementById('placeBtn'), err = document.getElementById('orderErr');
+      err.textContent = ''; btn.disabled = true;
+      try {
+        const order = await api('/orders', {
+          method: 'POST',
+          body: {
+            items: [...cart.entries()].map(([menuItem, qty]) => ({ menuItem, qty })),
+            address: f.get('address'), phone: f.get('phone'), notes: f.get('notes'), paymentMethod: f.get('paymentMethod'),
+          },
+        });
+        cart.clear(); renderMenu(); renderCart(); toggleCart(false);
+        toast(`Order ${order.orderNumber} placed!`, 'ok');
+        location.href = '/orders.html';
+      } catch (ex) { err.textContent = ex.message; }
+      btn.disabled = false;
+    };
+
+    /* ---------- Active-order badge (the full list lives on /orders.html) ---------- */
+    const ACTIVE = ['Pending', 'Confirmed', 'Preparing', 'Out for Delivery'];
+
+    function renderOrderBadge() {
+      const n = orders.filter((o) => ACTIVE.includes(o.status)).length;
+      const badge = document.getElementById('orderCount');
+      badge.textContent = n;
+      badge.classList.toggle('hidden', !n);
+    }
+
+    function upsert(order) {
+      const i = orders.findIndex((o) => o._id === order._id);
+      i >= 0 ? (orders[i] = order) : orders.unshift(order);
+      renderOrderBadge();
+    }
+
+    if (user) {
+      const socket = connectSocket();
+      socket.on('order:updated', (o) => { upsert(o); toast(`${o.orderNumber}: ${o.status}`, o.status === 'Cancelled' ? 'bad' : 'ok'); });
+      socket.on('menu:updated', (item) => {
+        const i = menu.findIndex((m) => m._id === item._id);
+        if (i >= 0) menu[i] = item;
+        if (!item.available) cart.delete(item._id);
+        renderMenu(); renderCart();
+      });
+      loadMenu().then(renderCart).catch((e) => toast(e.message, 'bad'));
+      api('/orders/my').then((list) => { orders = list; renderOrderBadge(); }).catch(() => {});
+    }
+  </script>
+</body>
+</html>

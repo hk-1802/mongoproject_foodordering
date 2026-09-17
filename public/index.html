@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FoodHub — Sign In</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="auth-wrap">
+    <section class="auth-hero">
+      <h1>Hungry?<br />FoodHub delivers.</h1>
+      <p>Dosas, biryani, pizza and everything in between — ordered in a few taps and tracked live, right to your door.</p>
+      <div class="emojis">🍛 🍕 🥞 🍜 🍔</div>
+    </section>
+
+    <section class="auth-panel">
+      <div class="auth-card">
+        <div class="tabs">
+          <button id="tabLogin" class="active">Sign In</button>
+          <button id="tabSignup">Create Account</button>
+        </div>
+
+        <form id="loginForm" autocomplete="on">
+          <div class="field"><label>Email</label><input type="email" name="email" required placeholder="you@example.com" /></div>
+          <div class="field"><label>Password</label><input type="password" name="password" required placeholder="••••••••" /></div>
+          <div class="error" id="loginErr"></div>
+          <button class="btn block" type="submit">Sign In</button>
+          <p class="hint">Admins sign in here too — you'll be taken to the dashboard.</p>
+        </form>
+
+        <form id="signupForm" class="hidden">
+          <div class="field"><label>Full name</label><input name="name" required placeholder="Your name" /></div>
+          <div class="field"><label>Email</label><input type="email" name="email" required placeholder="you@example.com" /></div>
+          <div class="field"><label>Phone</label><input name="phone" placeholder="10-digit mobile" pattern="[0-9+ ]{10,15}" /></div>
+          <div class="field"><label>Password</label><input type="password" name="password" required minlength="6" placeholder="Min 6 characters" /></div>
+          <div class="field"><label>Confirm password</label><input type="password" name="confirm" required minlength="6" /></div>
+          <div class="error" id="signupErr"></div>
+          <button class="btn block" type="submit">Create Account</button>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <script src="/js/common.js"></script>
+  <script>
+    // Already logged in? go straight in
+    if (Auth.token && Auth.user) location.href = Auth.user.role === 'admin' ? '/admin.html' : '/menu.html';
+
+    const loginForm = document.getElementById('loginForm');
+    const signupForm = document.getElementById('signupForm');
+    const tabLogin = document.getElementById('tabLogin');
+    const tabSignup = document.getElementById('tabSignup');
+
+    function show(which) {
+      const login = which === 'login';
+      loginForm.classList.toggle('hidden', !login);
+      signupForm.classList.toggle('hidden', login);
+      tabLogin.classList.toggle('active', login);
+      tabSignup.classList.toggle('active', !login);
+    }
+    tabLogin.onclick = () => show('login');
+    tabSignup.onclick = () => show('signup');
+
+    function enter({ token, user }) {
+      Auth.save(token, user);
+      location.href = user.role === 'admin' ? '/admin.html' : '/menu.html';
+    }
+
+    loginForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('loginErr');
+      const btn = loginForm.querySelector('button');
+      err.textContent = ''; btn.disabled = true;
+      try {
+        const f = new FormData(loginForm);
+        enter(await api('/auth/login', { method: 'POST', body: { email: f.get('email'), password: f.get('password') } }));
+      } catch (ex) { err.textContent = ex.message; }
+      btn.disabled = false;
+    };
+
+    signupForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const err = document.getElementById('signupErr');
+      const btn = signupForm.querySelector('button');
+      const f = new FormData(signupForm);
+      err.textContent = '';
+      if (f.get('password') !== f.get('confirm')) { err.textContent = 'Passwords do not match'; return; }
+      btn.disabled = true;
+      try {
+        enter(await api('/auth/register', {
+          method: 'POST',
+          body: { name: f.get('name'), email: f.get('email'), phone: f.get('phone'), password: f.get('password') },
+        }));
+      } catch (ex) { err.textContent = ex.message; }
+      btn.disabled = false;
+    };
+  </script>
+</body>
+</html>

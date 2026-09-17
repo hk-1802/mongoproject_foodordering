@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FoodHub — Admin Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo">🍽️ FoodHub Admin</div>
+    <div class="right">
+      <span class="live off" id="liveDot">Live</span>
+      <span class="hello" id="hello"></span>
+      <button class="btn ghost small" onclick="Auth.confirmLogout()">Logout</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="stats" id="stats"></div>
+
+    <div class="admin-tabs">
+      <button class="chip active" data-tab="orders">📦 Orders</button>
+      <button class="chip" data-tab="menu" id="menuTab">🍛 Menu</button>
+      <button class="chip" data-tab="users">👥 Customers</button>
+    </div>
+
+    <!-- Orders -->
+    <section id="tab-orders">
+      <div class="toolbar">
+        <select class="search" id="statusFilter" style="max-width:220px">
+          <option value="">All statuses</option>
+        </select>
+        <input class="search" id="orderSearch" placeholder="Search by order no, name, email, phone…" />
+        <button class="btn ghost small" id="soundBtn">🔔 Sound on</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Placed</th><th>Status</th></tr></thead>
+          <tbody id="orderRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Menu -->
+    <section id="tab-menu" class="hidden">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Dish</th><th>Category</th><th>Price (₹)</th><th>Available</th></tr></thead>
+          <tbody id="menuRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Users -->
+    <section id="tab-users" class="hidden">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Orders</th><th>Spent</th><th>Joined</th></tr></thead>
+          <tbody id="userRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/common.js"></script>
+  <script>
+    const admin = Auth.require('admin');
+    document.getElementById('hello').textContent = admin ? admin.email : '';
+
+    const STATUSES = ['Pending', 'Confirmed', 'Preparing', 'Out for Delivery', 'Delivered', 'Cancelled'];
+    let orders = [], menu = [], sound = true;
+    const freshIds = new Set();
+
+    document.getElementById('statusFilter').innerHTML += STATUSES.map((s) => `<option>${s}</option>`).join('');
+    document.getElementById('statusFilter').onchange = renderOrders;
+    document.getElementById('orderSearch').oninput = renderOrders;
+    document.getElementById('soundBtn').onclick = (e) => { sound = !sound; e.target.textContent = sound ? '🔔 Sound on' : '🔕 Sound off'; };
+
+    /* ---------- Tabs ---------- */
+    document.querySelector('.admin-tabs').onclick = (e) => {
+      const tab = e.target.dataset.tab; if (!tab) return;
+      document.querySelectorAll('.admin-tabs .chip').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+      ['orders', 'menu', 'users'].forEach((t) => document.getElementById('tab-' + t).classList.toggle('hidden', t !== tab));
+      if (tab === 'users') loadUsers();
+    };
+
+    /* ---------- Stats ---------- */
+    async function loadStats() {
+      const s = await api('/admin/stats');
+      document.getElementById('stats').innerHTML = `
+        <div class="stat"><small>Today's orders</small><b>${s.todayOrders}</b></div>
+        <div class="stat"><small>Today's revenue</small><b>${rupee(s.todayRevenue)}</b></div>
+        <div class="stat"><small>Pending</small><b style="color:var(--amber)">${s.pending}</b></div>
+        <div class="stat"><small>In progress</small><b style="color:var(--purple)">${s.active}</b></div>
+        <div class="stat"><small>Total revenue</small><b>${rupee(s.totalRevenue)}</b></div>
+        <div class="stat"><small>Customers</small><b>${s.users}</b></div>
+        <div class="stat" style="grid-column: span 2"><small>Top sellers</small>
+          <div style="font-size:14px;margin-top:6px">${s.topItems.length ? s.topItems.map((t) => `${t.emoji} ${esc(t._id)} <b>×${t.qty}</b>`).join(' &nbsp;·&nbsp; ') : '<span class="muted">No sales yet</span>'}</div>
+        </div>`;
+    }
+
+    /* ---------- Orders ---------- */
+    async function loadOrders() { orders = await api('/admin/orders'); renderOrders(); }
+
+
+    function renderOrders() {
+      const f = document.getElementById('statusFilter').value;
+      const term = document.getElementById('orderSearch').value.trim().toLowerCase();
+      const list = orders.filter((o) => (!f || o.status === f) &&
+        (!term || [o.orderNumber, o.customerName, o.customerEmail, o.phone].some((v) => String(v).toLowerCase().includes(term))));
+      document.getElementById('orderRows').innerHTML = list.length ? list.map((o) => `
+        <tr class="${freshIds.has(o._id) ? 'flash' : ''}">
+          <td><b>${esc(o.orderNumber)}</b><div class="muted">${esc(o.paymentMethod)}</div></td>
+          <td>${esc(o.customerName)}<div class="muted">${esc(o.customerEmail)}<br/>📞 ${esc(o.phone)}<br/>📍 ${esc(o.address)}</div></td>
+          <td>${o.items.map((i) => `${i.emoji} ${esc(i.name)} × ${i.qty}`).join('<br/>')}${o.notes ? `<div class="muted">📝 ${esc(o.notes)}</div>` : ''}</td>
+          <td><b>${rupee(o.total)}</b></td>
+          <td>${fmtTime(o.createdAt)}<div class="muted">updated ${fmtTime(o.updatedAt)}</div></td>
+          <td>
+            <span class="status ${statusClass(o.status)}">${esc(o.status)}</span><br/><br/>
+            <select data-id="${o._id}" ${o.status === 'Cancelled' || o.status === 'Delivered' ? 'disabled' : ''}>
+              ${STATUSES.map((s) => `<option ${s === o.status ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>
+          </td>
+        </tr>`).join('') : '<tr><td colspan="6" class="empty">No orders yet — they will appear here instantly.</td></tr>';
+      freshIds.clear();
+    }
+
+    document.getElementById('orderRows').onchange = async (e) => {
+      const id = e.target.dataset.id; if (!id) return;
+      const status = e.target.value;
+      const o = orders.find((x) => x._id === id);
+
+      // Cancelling is the one choice that can't be walked back, so confirm it.
+      if (status === 'Cancelled' &&
+          !confirm(`Cancel order ${o.orderNumber} from ${o.customerName}?\n\nThe customer is notified immediately and this cannot be undone.`)) {
+        e.target.value = o.status; // put the dropdown back where it was
+        return;
+      }
+
+      e.target.disabled = true;
+      try {
+        upsertOrder(await api(`/admin/orders/${id}/status`, { method: 'PATCH', body: { status } }));
+        toast(status === 'Cancelled' ? `${o.orderNumber} cancelled` : `${o.orderNumber} → ${status}`, status === 'Cancelled' ? 'bad' : 'ok');
+      } catch (ex) { toast(ex.message, 'bad'); loadOrders(); }
+    };
+
+    function upsertOrder(o, isNew) {
+      const i = orders.findIndex((x) => x._id === o._id);
+      i >= 0 ? (orders[i] = o) : orders.unshift(o);
+      if (isNew) freshIds.add(o._id);
+      renderOrders(); loadStats();
+    }
+
+    /* ---------- Menu ---------- */
+    async function loadMenu() {
+      menu = await api('/menu');
+      document.getElementById('menuTab').textContent = `🍛 Menu (${menu.length})`; // real count, not a hardcoded one
+      document.getElementById('menuRows').innerHTML = menu.map((m) => `
+        <tr>
+          <td>${m.emoji} <b>${esc(m.name)}</b> <span class="vegdot ${m.veg ? '' : 'nonveg'}"></span><div class="muted">${esc(m.description)}</div></td>
+          <td>${esc(m.category)}</td>
+          <td><input type="number" min="0" value="${m.price}" data-price="${m._id}" style="width:90px;border:1px solid var(--line);border-radius:8px;padding:6px" /></td>
+          <td><label class="switch"><input type="checkbox" data-avail="${m._id}" ${m.available ? 'checked' : ''}/><span></span></label></td>
+        </tr>`).join('');
+    }
+    document.getElementById('menuRows').onchange = async (e) => {
+      const { avail, price } = e.target.dataset;
+      try {
+        if (avail) await api(`/menu/${avail}`, { method: 'PATCH', body: { available: e.target.checked } });
+        if (price) await api(`/menu/${price}`, { method: 'PATCH', body: { price: Number(e.target.value) } });
+        toast('Menu updated', 'ok');
+      } catch (ex) { toast(ex.message, 'bad'); loadMenu(); }
+    };
+
+    /* ---------- Users ---------- */
+    async function loadUsers() {
+      const users = await api('/admin/users');
+      document.getElementById('userRows').innerHTML = users.length ? users.map((u) => `
+        <tr><td><b>${esc(u.name)}</b></td><td>${esc(u.email)}</td><td>${esc(u.phone || '—')}</td>
+        <td>${u.orderCount}</td><td>${rupee(u.spent)}</td><td>${fmtTime(u.createdAt)}</td></tr>`).join('')
+        : '<tr><td colspan="6" class="empty">No customers yet.</td></tr>';
+    }
+
+    /* ---------- Real-time ---------- */
+    if (admin) {
+      const socket = connectSocket((on) => {
+        document.getElementById('liveDot').classList.toggle('off', !on);
+        if (on) { loadOrders(); loadStats(); } // resync after reconnect
+      });
+      socket.on('order:new', (o) => {
+        upsertOrder(o, true);
+        if (sound) beep();
+        toast(`🆕 New order ${o.orderNumber} from ${o.customerName} — ${rupee(o.total)}`, 'ok');
+        document.title = '(New order) FoodHub Admin';
+        setTimeout(() => (document.title = 'FoodHub — Admin Dashboard'), 5000);
+      });
+      socket.on('order:updated', (o) => upsertOrder(o));
+      socket.on('menu:updated', () => loadMenu());
+
+      loadStats(); loadOrders(); loadMenu();
+    }
+  </script>
+</body>
+</html>
